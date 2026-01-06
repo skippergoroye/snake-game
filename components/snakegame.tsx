@@ -1,4 +1,5 @@
-import React from 'react'
+"use client"
+
 import React, { useEffect, useCallback } from 'react';
 import { Provider, useDispatch, useSelector } from 'react-redux';
 import { configureStore, createSlice } from '@reduxjs/toolkit';
@@ -8,7 +9,10 @@ const GRID_SIZE = 20;
 const CELL_SIZE = 25;
 const INITIAL_SNAKE = [{ x: 10, y: 10 }];
 const INITIAL_DIRECTION = { x: 1, y: 0 };
-const GAME_SPEED = 150;
+const GAME_SPEED = 300;
+const BONUS_SPAWN_CHANCE = 0.15; // 15% chance to spawn bonus food when eating regular food
+const BONUS_DURATION = 5000; // Bonus food lasts 5 seconds
+const BONUS_POINTS = 50; // Bonus food gives 50 points
 
 // Redux Slice
 const gameSlice = createSlice({
@@ -18,6 +22,7 @@ const gameSlice = createSlice({
     direction: INITIAL_DIRECTION,
     nextDirection: INITIAL_DIRECTION,
     food: { x: 15, y: 15 },
+    bonusFood: null as { x: number; y: number; spawnTime: number } | null,
     score: 0,
     gameOver: false,
     isPaused: false,
@@ -51,19 +56,65 @@ const gameSlice = createSlice({
       }
 
       const newSnake = [newHead, ...state.snake];
+      let foodEaten = false;
 
-      // Check if food is eaten
+      // Check if regular food is eaten
       if (newHead.x === state.food.x && newHead.y === state.food.y) {
         state.score += 10;
-        state.food = {
-          x: Math.floor(Math.random() * GRID_SIZE),
-          y: Math.floor(Math.random() * GRID_SIZE),
-        };
-      } else {
+        foodEaten = true;
+        
+        // Generate new food position
+        let newFoodPos: { x: number; y: number; };
+        do {
+          newFoodPos = {
+            x: Math.floor(Math.random() * GRID_SIZE),
+            y: Math.floor(Math.random() * GRID_SIZE),
+          };
+        } while (
+          newSnake.some(segment => segment.x === newFoodPos.x && segment.y === newFoodPos.y) ||
+          (state.bonusFood && state.bonusFood.x === newFoodPos.x && state.bonusFood.y === newFoodPos.y)
+        );
+        
+        state.food = newFoodPos;
+
+        // Chance to spawn bonus food
+        if (Math.random() < BONUS_SPAWN_CHANCE && !state.bonusFood) {
+          let bonusFoodPos;
+          do {
+            bonusFoodPos = {
+              x: Math.floor(Math.random() * GRID_SIZE),
+              y: Math.floor(Math.random() * GRID_SIZE),
+            };
+          } while (
+            newSnake.some(segment => segment.x === bonusFoodPos.x && segment.y === bonusFoodPos.y) ||
+            (bonusFoodPos.x === state.food.x && bonusFoodPos.y === state.food.y)
+          );
+          
+          state.bonusFood = {
+            ...bonusFoodPos,
+            spawnTime: Date.now(),
+          };
+        }
+      }
+
+      // Check if bonus food is eaten
+      if (state.bonusFood && newHead.x === state.bonusFood.x && newHead.y === state.bonusFood.y) {
+        state.score += BONUS_POINTS;
+        state.bonusFood = null;
+        foodEaten = true;
+      }
+
+      // If no food was eaten, remove tail
+      if (!foodEaten) {
         newSnake.pop();
       }
 
       state.snake = newSnake;
+    },
+    checkBonusFoodExpiry: (state) => {
+      if (state.bonusFood && Date.now() - state.bonusFood.spawnTime > BONUS_DURATION) {
+        state.bonusFood = null;
+      }
     },
     togglePause: (state) => {
       if (!state.gameOver) {
@@ -75,6 +126,7 @@ const gameSlice = createSlice({
       state.direction = INITIAL_DIRECTION;
       state.nextDirection = INITIAL_DIRECTION;
       state.food = { x: 15, y: 15 };
+      state.bonusFood = null;
       state.score = 0;
       state.gameOver = false;
       state.isPaused = false;
@@ -82,70 +134,70 @@ const gameSlice = createSlice({
   },
 });
 
-const { setDirection, moveSnake, togglePause, resetGame } = gameSlice.actions;
+const { setDirection, moveSnake, togglePause, resetGame, checkBonusFoodExpiry } = gameSlice.actions;
 
 // Redux Store
-const store = configureStore({
+export const store = configureStore({
   reducer: {
     game: gameSlice.reducer,
   },
 });
 
 const SnakeGame = () => {
-     const dispatch = useDispatch();
-      const { snake, food, score, gameOver, isPaused, highScore } = useSelector((state: { game: any; }) => state.game);
-    
-      // Handle keyboard input
-      const handleKeyPress = useCallback((e) => {
-        e.preventDefault();
-        switch (e.key) {
-          case 'ArrowUp':
-          case 'w':
-          case 'W':
-            dispatch(setDirection({ x: 0, y: -1 }));
-            break;
-          case 'ArrowDown':
-          case 's':
-          case 'S':
-            dispatch(setDirection({ x: 0, y: 1 }));
-            break;
-          case 'ArrowLeft':
-          case 'a':
-          case 'A':
-            dispatch(setDirection({ x: -1, y: 0 }));
-            break;
-          case 'ArrowRight':
-          case 'd':
-          case 'D':
-            dispatch(setDirection({ x: 1, y: 0 }));
-            break;
-          case ' ':
-            dispatch(togglePause());
-            break;
-          case 'r':
-          case 'R':
-            if (gameOver) dispatch(resetGame());
-            break;
-        }
-      }, [dispatch, gameOver]);
-    
-      useEffect(() => {
-        window.addEventListener('keydown', handleKeyPress);
-        return () => window.removeEventListener('keydown', handleKeyPress);
-      }, [handleKeyPress]);
-    
-      // Game loop
-      useEffect(() => {
-        const interval = setInterval(() => {
-          dispatch(moveSnake());
-        }, GAME_SPEED);
-    
-        return () => clearInterval(interval);
-      }, [dispatch]);
+  const dispatch = useDispatch();
+  const { snake, food, bonusFood, score, gameOver, isPaused, highScore } = useSelector((state: { game: any }) => state.game);
 
+  // Handle keyboard input
+  const handleKeyPress = useCallback((e) => {
+    e.preventDefault();
+    switch (e.key) {
+      case 'ArrowUp':
+      case 'w':
+      case 'W':
+        dispatch(setDirection({ x: 0, y: -1 }));
+        break;
+      case 'ArrowDown':
+      case 's':
+      case 'S':
+        dispatch(setDirection({ x: 0, y: 1 }));
+        break;
+      case 'ArrowLeft':
+      case 'a':
+      case 'A':
+        dispatch(setDirection({ x: -1, y: 0 }));
+        break;
+      case 'ArrowRight':
+      case 'd':
+      case 'D':
+        dispatch(setDirection({ x: 1, y: 0 }));
+        break;
+      case ' ':
+        dispatch(togglePause());
+        break;
+      case 'r':
+      case 'R':
+        if (gameOver) dispatch(resetGame());
+        break;
+    }
+  }, [dispatch, gameOver]);
+
+  useEffect(() => {
+    window.addEventListener('keydown', handleKeyPress);
+    return () => window.removeEventListener('keydown', handleKeyPress);
+  }, [handleKeyPress]);
+
+  // Game loop
+  useEffect(() => {
+    const interval = setInterval(() => {
+      dispatch(moveSnake());
+      dispatch(checkBonusFoodExpiry());
+    }, GAME_SPEED);
+
+    return () => clearInterval(interval);
+  }, [dispatch]);
 
   return (
-     <div className="min-h-screen bg-gradient-to-br from-slate-950 via-purple-950 to-slate-900 flex items-center justify-center p-8 relative overflow-hidden">
+    <div className="min-h-screen bg-gradient-to-br from-slate-950 via-purple-950 to-slate-900 flex items-center justify-center p-8 relative overflow-hidden">
       {/* Animated background grid */}
       <div className="absolute inset-0 opacity-10">
         <div className="absolute inset-0" style={{
@@ -166,6 +218,26 @@ const SnakeGame = () => {
         @keyframes pulse {
           0%, 100% { opacity: 1; }
           50% { opacity: 0.5; }
+        }
+        
+        @keyframes bonusPulse {
+          0%, 100% { 
+            opacity: 1;
+            transform: scale(1);
+          }
+          50% { 
+            opacity: 0.7;
+            transform: scale(1.1);
+          }
+        }
+        
+        @keyframes bonusGlow {
+          0%, 100% { 
+            box-shadow: 0 0 30px rgba(251, 191, 36, 0.9), 0 0 60px rgba(251, 191, 36, 0.6), 0 0 90px rgba(251, 191, 36, 0.3);
+          }
+          50% { 
+            box-shadow: 0 0 40px rgba(251, 191, 36, 1), 0 0 80px rgba(251, 191, 36, 0.8), 0 0 120px rgba(251, 191, 36, 0.5);
+          }
         }
         
         @keyframes glow {
@@ -211,6 +283,23 @@ const SnakeGame = () => {
           </div>
         </div>
 
+        {/* Bonus Food Info */}
+        {bonusFood && (
+          <div 
+            className="bg-amber-500/20 backdrop-blur-sm px-6 py-3 rounded-lg border-2 border-amber-500/60"
+            style={{ 
+              animation: 'bonusPulse 1s ease-in-out infinite',
+              fontFamily: 'Rajdhani, sans-serif'
+            }}
+          >
+            <div className="text-amber-300 text-sm font-bold tracking-wider flex items-center gap-2">
+              <span className="text-2xl">⭐</span>
+              BONUS FOOD ACTIVE! +{BONUS_POINTS} POINTS
+              <span className="text-2xl">⭐</span>
+            </div>
+          </div>
+        )}
+
         {/* Game Board */}
         <div className="relative">
           <div 
@@ -245,7 +334,7 @@ const SnakeGame = () => {
                 />
               ))}
 
-              {/* Food */}
+              {/* Regular Food */}
               <div
                 className="absolute"
                 style={{
@@ -260,6 +349,26 @@ const SnakeGame = () => {
                   border: '2px solid rgba(255, 255, 255, 0.3)',
                 }}
               />
+
+              {/* Bonus Food */}
+              {bonusFood && (
+                <div
+                  className="absolute flex items-center justify-center"
+                  style={{
+                    left: bonusFood.x * CELL_SIZE,
+                    top: bonusFood.y * CELL_SIZE,
+                    width: CELL_SIZE - 2,
+                    height: CELL_SIZE - 2,
+                    background: 'radial-gradient(circle, #fbbf24, #f59e0b, #d97706)',
+                    borderRadius: '50%',
+                    animation: 'bonusGlow 1s ease-in-out infinite',
+                    border: '3px solid rgba(255, 255, 255, 0.5)',
+                    fontSize: '16px',
+                  }}
+                >
+                  <span style={{ filter: 'drop-shadow(0 0 2px rgba(0, 0, 0, 0.8))' }}>⭐</span>
+                </div>
+              )}
 
               {/* Game Over Overlay */}
               {gameOver && (
@@ -315,11 +424,13 @@ const SnakeGame = () => {
           <div className="text-purple-300 text-sm space-y-1">
             <div>↑ ↓ ← → or W A S D to move</div>
             <div>SPACE to pause • R to restart</div>
+            <div className="text-amber-300 font-bold mt-2">⭐ Bonus Food: +{BONUS_POINTS} pts (5s duration)</div>
           </div>
         </div>
       </div>
     </div>
-  )
-}
+  );
+};
 
-export default SnakeGame
+export default SnakeGame;
+
